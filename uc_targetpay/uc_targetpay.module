@@ -1,0 +1,216 @@
+<?php
+/**
+ * @file 	Provides support for TargetPay iDEAL, MisterCash and Sofort Banking
+ * @author	Yellow Melon B.V. / www.idealplugins.nl
+ */
+
+require_once ("targetpay.class.php");
+
+function uc_targetpay_menu() {
+	global $language;
+	$items['cart/checkout/targetpay/return'] = array(
+    	'title' => 'TargetPay Payment',
+    	'page callback' => 'uc_targetpay_return',
+    	'access arguments' => array('access content'),
+    	'type' => MENU_CALLBACK,
+  		);
+  	$items['cart/checkout/targetpay/report'] = array(
+    	'title' => 'TargetPay Payment',
+    	'page callback' => 'uc_targetpay_report',
+    	'access arguments' => array('access content'),
+    	'type' => MENU_CALLBACK,
+  		);
+	return $items;
+	}
+
+function uc_targetpay_init() {
+	global $language;
+  	drupal_add_css(drupal_get_path('module', 'uc_targetpay') .'/css/uc_targetpay.css');
+	}
+
+function uc_targetpay_theme() {
+	global $language;
+	return array('uc_targetpay_payment_form' =>
+    	array('arguments' =>
+        	array('form' => NULL)
+        	)
+    	);
+	}
+
+function uc_targetpay_uc_payment_method() {
+	global $language;
+	$methods[] = array(
+	    'id' => 'targetpay',
+	    'name' => t('TargetPay'),
+	    'title' => t('iDEAL/Mister Cash/Sofort Banking'),
+	    'desc' => t(($language->language=="nl") ? 'Betaal met iDEAL' : 'Pay by iDEAL/Mister Cash/Sofort Banking'),
+	    'callback' => 'uc_payment_method_targetpay',
+	    'weight' => 1,
+	    'checkout' => TRUE,
+	    'no_gateway' => TRUE
+		);
+	return $methods;
+	}
+
+function uc_payment_method_targetpay($op, &$order, $form = NULL, &$form_state = NULL) {
+	global $language;
+	switch ($op) {
+    	case "order-delete":
+	      	db_delete('uc_payment_targetpay')->condition('order_id', $order->order_id)->execute();
+	      	break;
+		case "cart-details":
+			$details = uc_targetpay_payment_form(array(), $form_state, $order);
+			return $details;
+	    case "cart-process":
+      		$order->payment_details['bank_id'] = check_plain($form_state['values']['panes']['payment']['details']['uc_targetpay_bank']);
+      		$_SESSION['uc_targetpay']['bank_id'] = $order->payment_details['bank_id'];
+      		return TRUE;
+    	case "order-submit":
+      		if ($order->payment_method === 'targetpay') {
+        		uc_targetpay_call($order);
+        		exit;
+      			}
+    	case "order-details":
+      		$details = uc_targetpay_payment_form(array(), $form_state, $order);
+      		return $details;
+		case "settings":
+			global $base_url;
+			$form['uc_targetpay_rtlo'] = array(
+				'#type' => 'textfield',
+				'#title' => t('TargetPay layoutcode (rtlo)'),
+				'#default_value' => 93929, // Default TargetPay
+				'#description' => t(
+	                ($language->language=="nl") ?
+	            		'Uw TargetPay layoutcode (=sub account). <br/>U kunt de layoutcode opzoeken op de pagina '.
+	                    '<a href="https://www.targetpay.com/subaccounts" target=_blank>\'Subaccounts\'</a> (bestaande klant)<br/>of meld u gratis aan voor een account '.
+	                    'op <a href="https://www.targetpay.com/signup" target=_blank>www.targetpay.com/signup</a> (gebruik actiecode YM4U3G voor een gereduceerd iDEAL tarief)' :
+	            		'Your TargetPay layout (=sub account) code. <br/>Look up your layoutcode on the page '.
+	                    '<a href="https://www.targetpay.com/subaccounts" target=_blank>\'Manage subaccounts\'</a> (existing account)<br/>or get a new, free '.
+	                    'account on <a href="https://www.targetpay.com/signup" target=_blank>www.targetpay.com/signup</a> (use promotional code <strong>YM3R2A</strong> for a reduced iDEAL price)'),
+				);
+			$form['uc_targetpay_test_mode'] = array(
+				'#type' => 'checkbox',
+				'#title' => t('Test mode'),
+				'#default_value' => variable_get('uc_targetpay_test_mode', 0),
+				'#description' => t(
+	            	($language->language=="nl") ?
+		                'Schakel de testmode in, ook geannuleerde betalingen worden goedgekeurd. Niet vergeten uit te zetten dus!' :
+		                'Enable test mode. All payment attempts will be flagged as paid. Handle with care!'),
+				);
+			return $form;
+		}
+	}
+
+function uc_targetpay_payment_form($form_state, $order) {
+	global $language;
+	$targetPay = new TargetPayCore ("AUTO", variable_get('uc_targetpay_rtlo', ''), '07f4a880528c35a2eda1d459087eeba6', 'nl', variable_get('uc_targetpay_test_mode', 0));
+	$form['uc_targetpay_bank'] = array(
+		'#type' => 'select',
+		'#title' => ($language->language=="nl") ? 'Kies uw bank en betaalwijze' : 'Choose your bank and payment method:',
+		'#options' => $targetPay->getBankList(),
+		'#description' => t(''),
+		);
+	return $form;
+	}
+
+
+function uc_targetpay_call($order) {
+	global $language, $base_url;
+	$targetPay = new TargetPayCore ("AUTO", variable_get('uc_targetpay_rtlo', ''), '07f4a880528c35a2eda1d459087eeba6', 'nl', variable_get('uc_targetpay_test_mode', 0));
+
+	$returnUrl = $base_url.'/cart/checkout/targetpay/return?paymethod=%payMethod%';
+	$reportUrl = $base_url.'/cart/checkout/targetpay/report?paymethod=%payMethod%';
+
+	$transaction = new stdClass();
+	$transaction->order_id     = $order->order_id;
+	$transaction->bank_id      = check_plain($_SESSION['uc_targetpay']['bank_id']);
+	$transaction->status       = 0;
+	$transaction->amount       = $order->order_total;
+	$transaction->description  = t("Order @order_id - @site_name", array('@order_id' => $order->order_id, '@site_name' => variable_get('site_name', '')));
+
+    $targetPay->setAmount (round($transaction->amount * 100));
+    $targetPay->setDescription ($transaction->description);
+    $targetPay->setReturnUrl ($returnUrl);
+    $targetPay->setReportUrl ($reportUrl);
+    $targetPay->setBankId ($transaction->bank_id);
+
+	if ($targetPay->startPayment()) {
+		$transaction->transaction_id = $targetPay->getTransactionId();
+        $transaction->paymethod = $targetPay->getPayMethod();
+        $transaction->bank_id = $targetPay->getBankId();
+		$_SESSION['uc_targetpay']['order_id'] = $transaction->order_id;
+		$_SESSION['uc_targetpay']['transaction_id'] = $transaction->transaction_id;
+		$_SESSION['uc_targetpay']['paymethod'] = $transaction->paymethod;
+		uc_targetpay_transaction_save($transaction);
+		header("Location: ".$targetPay->getBankUrl());
+		exit;
+		} else {
+		watchdog('uc_targetpay', 'Payment creation failed. Error message: %error', array('%error' => $targetPay->getErrorMessage()), WATCHDOG_ERROR);
+		drupal_set_message(t($targetPay->getErrorMessage()), 'error');
+		drupal_goto('cart/checkout');
+		}
+	}
+
+function uc_targetpay_return() {
+	global $language;
+	$goto = 'cart/checkout';
+	if(!$_SESSION['uc_targetpay']['transaction_id'] || !$_GET['trxid']) {
+		watchdog('uc_targetpay', 'Empty transaction ID.', array(), WATCHDOG_ERROR);
+		drupal_set_message(t(($language->language=="nl") ? 'De betaling kon niet gecontroleerd worden. Het transactie ID is leeg' : 'The payment could not be checked, transaction ID is empty'), 'error');
+		} else
+    if($_SESSION['uc_targetpay']['transaction_id'] !== $_GET['trxid']) {
+		watchdog('uc_targetpay', 'Transaction ID`s do not match.', array(), WATCHDOG_ERROR);
+		drupal_set_message(t(($language->language=="nl") ? 'De betaling kon niet gecontroleerd worden. Transactie ID\'s verschillen' : 'The payment could not be checked. Transaction IDs differ'), 'error');
+		} else
+    if($transaction = uc_targetpay_transaction_get($_SESSION['uc_targetpay']['paymethod'], $_SESSION['uc_targetpay']['transaction_id'])) {
+		if($transaction->status) {
+			$_SESSION['do_complete'] = TRUE;
+            $_SESSION['uc_checkout'][$transaction->order_id]['do_complete'] = TRUE;
+			$goto = 'cart/checkout/complete';
+			} else {
+			watchdog('uc_targetpay', 'The payment was cancelled.', array(), WATCHDOG_WARNING);
+			drupal_set_message(t(($language->language=="nl") ? 'De betaling werd afgebroken. Probeer het s.v.p. opnieuw...' : 'The payment was cancelled, please try again...'), 'error');
+			}
+    	} else {
+		drupal_set_message(t(($language->language=="nl") ? 'De betaling kon niet gecontroleerd worden. Probeer het s.v.p. opnieuw' : 'The payment could not be checked'), 'error');
+		}
+	unset($_SESSION['uc_targetpay']);
+	drupal_goto($goto);
+	}
+
+function uc_targetpay_report() {
+	global $language;
+	if($transaction = uc_targetpay_transaction_get($_GET['paymethod'], $_POST['trxid'])) {
+		$targetPay = new TargetPayCore ($transaction->paymethod, variable_get('uc_targetpay_rtlo', ''), '07f4a880528c35a2eda1d459087eeba6', 'nl', variable_get('uc_targetpay_test_mode', 0));
+		$targetPay->checkPayment($transaction->transaction_id);
+		if ((bool)$targetPay->getPaidStatus() && !(bool)$transaction->status) {
+			$message = t(
+            	($language->language=="nl") ?
+                	'Betaling via TargetPay voor bestelling @order_id is gelukt' :
+                    'Succesfull TargetPay payment received for order @order_id',
+                array('@order_id' => $transaction->order_id));
+			uc_payment_enter($transaction->order_id, 'targetpay', $transaction->amount, 0, array('transaction_id' => $transaction->transaction_id), $message);
+			uc_order_comment_save($transaction->order_id, 0, $message, 'admin');
+			uc_targetpay_transaction_status_update($transaction->transaction_id, 1);
+			}
+        } else {
+		watchdog('uc_targetpay', 'Unkown transaction ID.', array(), WATCHDOG_WARNING);
+		}
+	exit;
+	}
+
+function uc_targetpay_transaction_save($transaction) {
+	(array)$transaction;
+	drupal_write_record('uc_payment_targetpay', $transaction);
+	}
+
+function uc_targetpay_transaction_get($paymethod, $transaction_id) {
+	global $language;
+	return db_query("SELECT * FROM {uc_payment_targetpay} WHERE paymethod = :paymethod AND transaction_id = :transaction_id",
+    			array(':paymethod' => $paymethod, ':transaction_id' => $transaction_id))->fetchObject();
+	}
+
+function uc_targetpay_transaction_status_update($transaction_id, $status = 0) {
+	global $language;
+	db_update('uc_payment_targetpay')->fields(array('status' => $status))->condition('transaction_id', check_plain($transaction_id))->execute();
+	}
