@@ -180,6 +180,7 @@ function uc_targetpay_return() {
 
 function uc_targetpay_report() {
 	global $language;
+	echo "Report start... ";
 	if($transaction = uc_targetpay_transaction_get($_GET['paymethod'], $_POST['trxid'])) {
 		$targetPay = new TargetPayCore ($transaction->paymethod, variable_get('uc_targetpay_rtlo', ''), '07f4a880528c35a2eda1d459087eeba6', 'nl', variable_get('uc_targetpay_test_mode', 0));
 		$targetPay->checkPayment($transaction->transaction_id);
@@ -192,8 +193,12 @@ function uc_targetpay_report() {
 			uc_payment_enter($transaction->order_id, 'targetpay', $transaction->amount, 0, array('transaction_id' => $transaction->transaction_id), $message);
 			uc_order_comment_save($transaction->order_id, 0, $message, 'admin');
 			uc_targetpay_transaction_status_update($transaction->transaction_id, 1);
+			echo "Paid";
+			} else {
+			echo "Not paid";
 			}
         } else {
+        echo "Tx not found";
 		watchdog('uc_targetpay', 'Unkown transaction ID.', array(), WATCHDOG_WARNING);
 		}
 	exit;
