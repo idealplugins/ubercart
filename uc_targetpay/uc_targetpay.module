@@ -193,14 +193,19 @@ function uc_targetpay_report() {
 			uc_payment_enter($transaction->order_id, 'targetpay', $transaction->amount, 0, array('transaction_id' => $transaction->transaction_id), $message);
 			uc_order_comment_save($transaction->order_id, 0, $message, 'admin');
 			uc_targetpay_transaction_status_update($transaction->transaction_id, 1);
-			echo "Paid";
+			echo "Paid... ";
 			} else {
-			echo "Not paid";
+				if ((bool)$transaction->status) {
+					echo "Already completed, skipped... ";
+				} else {
+					echo "Not paid " . $targetPay->getErrorMessage(). "... ";
+				}
 			}
         } else {
-        echo "Tx not found";
+        echo "Transaction ".$transaction->transaction_id." not found... ";
 		watchdog('uc_targetpay', 'Unkown transaction ID.', array(), WATCHDOG_WARNING);
 		}
+	echo "(Ubercart, 23-04-2015)";
 	exit;
 	}
 
